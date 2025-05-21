@@ -126,3 +126,9 @@ def create_grid(h, w, c=None):
     return grid
 
 
+def compute_phase_encoding(kx, ky, N_x, N_y):
+    """计算额外的相位编码"""
+    phase_x = torch.tile(torch.linspace(-kx, N_x - kx - 1, steps=N_x).view(N_x, 1), [1, N_y]) / N_x * 2 * np.pi
+    phase_y = torch.tile(torch.linspace(-ky, N_y - ky - 1, steps=N_y).view(1, N_y), [N_x, 1]) / N_y * 2 * np.pi
+    return phase_x + phase_y
+    
