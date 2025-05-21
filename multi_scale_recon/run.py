@@ -25,7 +25,8 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, betas=(config.beta1, config.beta2),
                                  weight_decay=config.weight_decay, amsgrad=True)
     # learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=config.scheduler_step, gamma=0.5)
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=config.scheduler_step, gamma=0.5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.n_iters, eta_min=1e-8, last_epoch=-1)
     # load checkpoint
     metric_ssim = 0
     start_iter = 0
@@ -49,39 +50,61 @@ if __name__ == '__main__':
             optimizer.zero_grad()
 
             inputs, targets = next(train_loader)
-            pred_image = model(inputs['coords'].to(device),
-                               inputs['undersampled_image'].to(device),
-                               inputs['down_scale'].to(device) if config.scale_embed else None)
-            # image domain loss
-            loss_image = loss_fn_1(pred_image, targets['image'].to(device))
+            intensity, phase = model(inputs['coords'].to(device),
+                                     inputs['undersampled_image'].to(device),
+                                     inputs['undersampled_angle'].to(device),
+                                     inputs['down_scale'].to(device) if config.scale_embed else None)
 
-            loss_image.backward()
+            signal = intensity * torch.exp(1j * phase)
+            pred_kspace = torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(signal, dim=[-2, -1]), dim=[-2, -1]), dim=[-2, -1])
+
+            # pred_kspace = torch.zeros_like(targets['fullysampled_kspace'])
+            # for i in range(config.image_out_dim):
+            #     for j in range(config.image_size):
+            #         for k in range(config.image_size):
+            #             phase_bias = utils.compute_phase_encoding(j, k, config.image_size, config.image_size).to(device)
+            #             signal = signal_0[:, i, :, :] * torch.exp(1j * phase_bias)
+            #             pred_kspace[:, i, j, k] = torch.sum(signal, dim=[1, 2])
+
+            loss_r = loss_fn_1(pred_kspace.real, targets['fullysampled_kspace'].real.to(device))
+            loss_i = loss_fn_1(pred_kspace.imag, targets['fullysampled_kspace'].imag.to(device))
+            loss = loss_r + loss_i
+            loss.backward()
             optimizer.step()
 
             if (step + 1) % config.log_step == 0:
-                print('Step: [%d/%d], lr: [%.8f], loss_image=%.5f'
-                    % (step + 1, config.n_iters, optimizer.param_groups[0]['lr'], loss_image.item()))
-                log_file.write('Step: [%d/%d], lr: [%.8f], loss_image=%.5f\n'
-                    % (step + 1, config.n_iters, optimizer.param_groups[0]['lr'], loss_image.item()))
+                print('Step: [%d/%d], lr: [%.8f], loss=%.5f, loss_r=%.5f, loss_i=%.5f'
+                      % (step + 1, config.n_iters, optimizer.param_groups[0]['lr'], loss.item(), loss_r.item(), loss_i.item()))
+                log_file.write('Step: [%d/%d], lr: [%.8f], loss=%.5f, loss_r=%.5f, loss_i=%.5f\n'
+                               % (step + 1, config.n_iters, optimizer.param_groups[0]['lr'], loss.item(), loss_r.item(), loss_i.item()))
 
             if (step + 1) % config.val_step == 0:
                 with torch.no_grad():
                     ssim, psnr, image_loss = 0, 0, 0
                     for i, batch in enumerate(val_loader):
                         inputs, targets = batch
-                        pred_image = model(inputs['coords'].to(device),
-                                           inputs['undersampled_image'].to(device),
-                                           inputs['down_scale'].to(device) if config.scale_embed else None)
-                        # image domain loss
-                        image_loss += loss_fn_1(pred_image, targets['image'].to(device))
+                        intensity, phase = model(inputs['coords'].to(device),
+                                                 inputs['undersampled_image'].to(device),
+                                                 inputs['undersampled_angle'].to(device),
+                                                 inputs['down_scale'].to(device) if config.scale_embed else None)
+
+                        signal = intensity * torch.exp(1j * phase)
+                        pred_kspace = torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(signal, dim=[-2, -1]), dim=[-2, -1]), dim=[-2, -1])
+
+                        loss = loss_fn_1(pred_kspace.real, targets['fullysampled_kspace'].real.to(device)) + \
+                               loss_fn_1(pred_kspace.imag, targets['fullysampled_kspace'].imag.to(device))
+
+                        pred_image = torch.sqrt(torch.sum(intensity ** 2, dim=1, keepdim=True))
                         ssim += utils.ssim(pred_image, targets['image'].to(device)).item()
                         psnr += utils.psnr(pred_image, targets['image'].to(device)).item()
 
-                    image_loss /= len(val_loader)
+                    loss /= len(val_loader)
                     ssim /= len(val_loader)
                     psnr /= len(val_loader)
-                    print('Step: [%d/%d], val_image_loss=%.5f, val_ssim=%.5f, val_psnr=%.5f' % (step + 1, config.n_iters, image_loss, ssim, psnr))
-                    log_file.write('Step: [%d/%d], val_image_loss=%.5f, val_ssim=%.5f, val_psnr=%.5f\n' % (step + 1, config.n_iters, image_loss, ssim, psnr))
+                    print('Step: [%d/%d], val_loss=%.5f, val_ssim=%.5f, val_psnr=%.5f' % (
+                        step + 1, config.n_iters, loss, ssim, psnr))
+                    log_file.write('Step: [%d/%d], val_loss=%.5f, val_ssim=%.5f, val_psnr=%.5f\n' % (
+                        step + 1, config.n_iters, loss, ssim, psnr))
                     # save weights with max ssim on validation dataset
                     if ssim > metric_ssim:
                         metric_ssim = ssim
@@ -117,9 +140,11 @@ if __name__ == '__main__':
 
                     image = targets['image'].to(device)
                     # output generated data
-                    pred_image = model(inputs['coords'].to(device),
-                                       inputs['undersampled_image'].to(device),
-                                       inputs['down_scale'].to(device) if config.scale_embed else None)
+                    intensity, phase = model(inputs['coords'].to(device),
+                                             inputs['undersampled_image'].to(device),
+                                             inputs['undersampled_angle'].to(device),
+                                             inputs['down_scale'].to(device) if config.scale_embed else None)
+                    pred_image = torch.sqrt(torch.sum(intensity ** 2, dim=1, keepdim=True))
                     # evaluation metrics
                     eval_ssim += utils.ssim(pred_image, image).item()
                     eval_psnr += utils.psnr(pred_image, image).item()
