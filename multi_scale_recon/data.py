@@ -14,6 +14,10 @@ def ifft(kspace):
     img = np.sqrt(img.real ** 2 + img.imag ** 2)
     return img
 
+def angle_extraction(kspace):
+    img = np.fft.ifftshift(np.fft.ifftn(np.fft.fftshift(kspace)))
+    angle = np.angle(img)
+    return angle
 
 ############################# data loader ##################################
 class Dataset(data.Dataset):
@@ -31,12 +35,13 @@ class Dataset(data.Dataset):
     def __getitem__(self, ind):
         # down scale choice
         scale = np.random.choice(self.down_scale, 1)
-        # fully sampled kspace
-        fullysampled_kspace = np.load(self.filepath[ind])['fullysampled_kspace']
-        # fully sampled image
-        image = utils.normalize(np.sqrt(np.sum([ifft(k) ** 2 for k in fullysampled_kspace], axis=0)), 2e-6, 1e-8)
-        # coordinates
-        coords = utils.create_grid(image.shape[0], image.shape[1])
+        # fullysampled kspace
+        fullysampled_kspace = np.load(self.filepath[ind])['fullysampled_kspace'] / 2e-6
+        # fullysampled image
+        multicoil_image = np.array([ifft(k) for k in fullysampled_kspace])
+        image = np.sqrt(np.sum(multicoil_image ** 2, axis=0))
+        # angle of fullysampled image
+        fullysampled_angle = np.array([angle_extraction(k) for k in fullysampled_kspace])
         # undersampled kspace
         undersampled_kspace = np.zeros_like(fullysampled_kspace)
         idx_lower = int((1 - self.center_ratio) * fullysampled_kspace.shape[-1] / 2)
@@ -44,23 +49,28 @@ class Dataset(data.Dataset):
         undersampled_kspace[..., ::scale[0]] = fullysampled_kspace[..., ::scale[0]]
         undersampled_kspace[..., idx_lower:idx_upper] = fullysampled_kspace[..., idx_lower:idx_upper]
         # undersampled image
+        undersampled_image = np.array([ifft(k) for k in undersampled_kspace])
         if self.is_pre_combine:
-            undersampled_image = utils.normalize(np.sqrt(np.sum([ifft(k) ** 2 for k in undersampled_kspace], axis=0)), 2e-6, 1e-8)[None, ...]
-        else:
-            # normalization range: 1.53e-06 4.03e-13 for brain (2.14e-06 1.21e-08)
-            #                      3.60e-06 4.32e-13 for knee (4.22e-06 1.02e-08)
-            undersampled_image = utils.normalize(np.array([ifft(k) for k in undersampled_kspace]), 2e-6, 1e-8)
+            undersampled_image = np.sqrt(np.sum(undersampled_image ** 2, axis=0))[None, ...]
+        # angle of undersampled image
+        undersampled_angle = np.array([angle_extraction(k) for k in undersampled_kspace])
+        # coordinates
+        coords = utils.create_grid(fullysampled_kspace.shape[-2], fullysampled_kspace.shape[-1])
         # integrate inputs and targets
         inputs = {'coords': coords.astype(np.float32),
-                  'undersampled_image': undersampled_image,
-                  'undersampled_kspace': undersampled_kspace,
+                  'undersampled_image': undersampled_image.astype(np.float32),
+                  'undersampled_kspace': undersampled_kspace.astype(np.complex64),
+                  'undersampled_angle': undersampled_angle.astype(np.float32),
                   'down_scale': scale}
 
-        targets = {'image': np.expand_dims(image, axis=0),
-                   'fullysampled_kspace': fullysampled_kspace,
+        targets = {'image': np.expand_dims(image, axis=0).astype(np.float32),
+                   'multicoil_image': multicoil_image.astype(np.float32),
+                   'fullysampled_kspace': fullysampled_kspace.astype(np.complex64),
+                   'fullysampled_angle': fullysampled_angle.astype(np.float32),
                    'filename': self.filename[ind]}
 
         return inputs, targets
+
 
 def get_dataloader(config, evaluation=False, shuffle=True, eval_scale=None):
 
@@ -92,5 +102,4 @@ def cycle(dl):
     while True:
         for data in dl:
             yield data
-
 
