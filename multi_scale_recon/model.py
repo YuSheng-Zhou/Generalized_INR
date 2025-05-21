@@ -141,18 +141,14 @@ class network(nn.Module):
             embed_dim = None
 
         # encoder
-        if config.use_encoder:
-            self.encoder = ResEncoder(in_dim=config.image_in_dim,
-                                      hidden_dim=config.enc_hidden_dim,
-                                      out_dim=config.enc_out_dim,
-                                      act=self.act,
-                                      block_num=config.enc_block_num,
-                                      kernel_size=config.enc_kernel_size,
-                                      embed_dim=embed_dim)
-            in_dim += config.enc_out_dim
-        else:
-            self.encoder = None
-            in_dim += config.image_in_dim
+        self.encoder = ResEncoder(in_dim=config.image_in_dim,
+                                  hidden_dim=config.enc_hidden_dim,
+                                  out_dim=config.enc_out_dim,
+                                  act=self.act,
+                                  block_num=config.enc_block_num,
+                                  kernel_size=config.enc_kernel_size,
+                                  embed_dim=embed_dim)
+        in_dim += config.enc_out_dim
 
         # MLP
         self.skips = config.mlp_skips
@@ -163,10 +159,11 @@ class network(nn.Module):
             else:
                 MLP.append(nn.Conv2d(in_channels=config.mlp_hidden_dim, out_channels=config.mlp_hidden_dim, kernel_size=(1, 1)))
         self.MLP = nn.ModuleList(MLP)
-        self.out_linear = nn.Conv2d(in_channels=config.mlp_hidden_dim, out_channels=config.image_out_dim, kernel_size=(1, 1))
+        self.out_linear1 = nn.Conv2d(in_channels=config.mlp_hidden_dim, out_channels=config.image_out_dim, kernel_size=(1, 1))
+        self.out_linear2 = nn.Conv2d(in_channels=config.mlp_hidden_dim + config.image_in_dim, out_channels=config.image_out_dim, kernel_size=(1, 1))
 
 
-    def forward(self, coords, prior_intensity, scale=None):
+    def forward(self, coords, prior_intensity, prior_phase, scale=None):
 
         # the scale project to a vector
         if scale is not None:
@@ -175,8 +172,7 @@ class network(nn.Module):
             scale_embed = None
 
         # encoding prior_intensity
-        if self.encoder is not None:
-            prior_intensity = self.encoder(prior_intensity, scale_embed)
+        prior_intensity = self.encoder(prior_intensity, scale_embed)
 
         # position encoding
         if self.pos_encoding is not None:
@@ -192,6 +188,7 @@ class network(nn.Module):
             h = self.act(self.MLP[i](h))
             if i+1 in self.skips:
                 h = torch.cat([features, h], dim=1)
-        out = self.out_linear(h)
+        intensity = self.out_linear1(h)
+        phase = self.out_linear2(torch.cat([h, prior_phase], dim=1))
 
-        return out
+        return intensity, phase
