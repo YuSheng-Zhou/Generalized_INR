@@ -11,9 +11,9 @@ class config(object):
     is_eval = True
 
     # path
-    snap_path = ''
-    datapath = ''
-    eval_path = ''
+    snap_path = 'results\\knee\\scale=4-5-6'
+    datapath = 'G:\\dataset\\fastMRI_knee\\Reconstruction'
+    eval_path = 'G:\\dataset\\fastMRI_knee\\Reconstruction\\restored\\msr-new'
 
     # data params
     down_scale = (4, 5, 6, )              # MRI undersample scale
@@ -46,9 +46,9 @@ class config(object):
     enc_kernel_size = (5, 5)
 
     # ablation settings
-    use_encoder = True
     scale_embed = True
     pos_encoding = True
+
     is_pre_combine = False
 
     # positional encoding params:
@@ -68,6 +68,7 @@ class config(object):
             else:
                 self.image_in_dim = 15
                 self.image_size = 320
+        self.image_out_dim = self.image_in_dim
 
         if record:
             self.record()
