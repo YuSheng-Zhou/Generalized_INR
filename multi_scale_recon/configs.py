@@ -11,9 +11,9 @@ class config(object):
     is_eval = True
 
     # path
-    snap_path = 'results\\knee\\scale=4-5-6'
-    datapath = 'G:\\dataset\\fastMRI_knee\\Reconstruction'
-    eval_path = 'G:\\dataset\\fastMRI_knee\\Reconstruction\\restored\\msr-new'
+    snap_path = ''
+    datapath = ''
+    eval_path = ''
 
     # data params
     down_scale = (4, 5, 6, )              # MRI undersample scale
